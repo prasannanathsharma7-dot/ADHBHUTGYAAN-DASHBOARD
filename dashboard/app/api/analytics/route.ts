@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { MongoClient } from "mongodb";
 
 const ALLOWED_DB_NAME = "astrology_intelligence";
-const FORBIDDEN_DB_NAMES = ["adhbhutgyaan_prod"];
+// Real production database name, confirmed via Atlas: "astrokashi".
+// adhbhutgyaan_prod kept as a placeholder alias in case of a future rename.
+const FORBIDDEN_DB_NAMES = ["astrokashi", "adhbhutgyaan_prod"];
 
 // Vendor-complaint codes (category F, 44-50) — mirrors nlp/taxonomy.py.
 // Keep these two lists in sync if the taxonomy ever changes.

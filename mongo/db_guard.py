@@ -12,7 +12,10 @@ from pymongo import MongoClient
 from pymongo.database import Database
 
 ALLOWED_DB_NAME = "astrology_intelligence"
-FORBIDDEN_DB_NAMES = {"adhbhutgyaan_prod"}  # extend if the prod db is ever renamed
+# Real production database name, confirmed via Atlas (list-databases on
+# the adhbhutgyaan-cluster / adhbhutgyaan project): "astrokashi".
+# adhbhutgyaan_prod is kept as a placeholder alias in case of a future rename.
+FORBIDDEN_DB_NAMES = {"astrokashi", "adhbhutgyaan_prod"}
 
 
 class DatabaseIsolationError(RuntimeError):

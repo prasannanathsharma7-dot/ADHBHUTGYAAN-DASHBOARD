@@ -18,7 +18,7 @@ Taxonomy definitions: [`nlp/taxonomy.py`](./nlp/taxonomy.py).
 ## ⚠️ Database isolation — non-negotiable
 
 This entire pipeline is hard-locked to a MongoDB database named
-`astrology_intelligence`. It must **never** touch `adhbhutgyaan_prod`
+`astrology_intelligence`. It must **never** touch `astrokashi` (production, formerly referenced here as `adhbhutgyaan_prod`)
 (the live production website database). This is enforced in code via
 `mongo/db_guard.py`, which every script imports — if you extend this
 pipeline, route any new MongoDB connection through `get_isolated_db()`

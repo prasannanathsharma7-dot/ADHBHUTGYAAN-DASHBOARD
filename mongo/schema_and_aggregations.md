@@ -3,7 +3,7 @@
 > **Database isolation — read this first.**
 > This entire pipeline is hard-locked to the `astrology_intelligence`
 > database. It must never connect to, query, or reference
-> `adhbhutgyaan_prod` (the live website's database). Every script goes
+> `astrokashi` (production, formerly referenced here as `adhbhutgyaan_prod`) (the live website's database). Every script goes
 > through `mongo/db_guard.py`'s `get_isolated_db()`, which refuses to
 > connect anywhere else. Do not bypass this by hardcoding a different
 > `MongoClient(...)` call somewhere new — route everything through the
