@@ -1,0 +1,5 @@
+# One entry per line: video_id,channel_name
+# Add real video IDs here (or generate this file via a separate
+# channel-video-discovery script before each run).
+# VIDEO_ID_1,ExampleAstrologyChannel
+# VIDEO_ID_2,ExampleAstrologyChannel
