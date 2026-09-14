@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   useReactTable,
   getCoreRowModel,
@@ -10,49 +10,74 @@ import {
   flexRender,
   createColumnHelper,
 } from "@tanstack/react-table";
+import { formatProblemCode } from "@/lib/taxonomy";
 
 type Lead = {
-  text: string;
-  topic: string;
-  detected_dosh: string | null;
-  urgency_score: number;
-  channel_name: string;
-  scraped_at: string;
+  comment_text: string;
+  analysis: {
+    primary_problem_code: string;
+    primary_dosh: string;
+    urgency_score: number;
+    recommended_service: string;
+    lead_status: string;
+  };
+  channel_title: string;
+  author_name: string;
 };
 
 const columnHelper = createColumnHelper<Lead>();
 
 const columns = [
-  columnHelper.accessor("text", {
+  columnHelper.accessor("comment_text", {
     header: "Comment",
-    cell: (info) => (
-      <span className="line-clamp-2 max-w-md">{info.getValue()}</span>
-    ),
+    cell: (info) => <span className="line-clamp-2 max-w-md">{info.getValue()}</span>,
   }),
-  columnHelper.accessor("topic", { header: "Topic" }),
-  columnHelper.accessor("detected_dosh", { header: "Dosh" }),
-  columnHelper.accessor("urgency_score", {
+  columnHelper.accessor((row) => row.analysis.primary_problem_code, {
+    id: "problem",
+    header: "Problem",
+    cell: (info) => formatProblemCode(info.getValue()),
+  }),
+  columnHelper.accessor((row) => row.analysis.primary_dosh, {
+    id: "dosh",
+    header: "Dosh",
+  }),
+  columnHelper.accessor((row) => row.analysis.urgency_score, {
+    id: "urgency",
     header: "Urgency",
-    cell: (info) => (
-      <span className="font-semibold">{info.getValue()}/5</span>
-    ),
+    cell: (info) => <span className="font-semibold">{info.getValue()}/10</span>,
   }),
-  columnHelper.accessor("channel_name", { header: "Channel" }),
+  columnHelper.accessor((row) => row.analysis.recommended_service, {
+    id: "service",
+    header: "Recommended Service",
+  }),
+  columnHelper.accessor((row) => row.analysis.lead_status, {
+    id: "status",
+    header: "Status",
+  }),
+  columnHelper.accessor("channel_title", { header: "Channel" }),
 ];
 
 export default function LeadsTable() {
   const [data, setData] = useState<Lead[]>([]);
   const [globalFilter, setGlobalFilter] = useState("");
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/analytics")
       .then((res) => res.json())
       .then((json) => {
-        setData(json.high_intent_leads ?? []);
+        if (json.error) {
+          setError(json.error);
+        } else {
+          setData(json.high_intent_leads ?? []);
+        }
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch((e) => {
+        setError(String(e));
+        setLoading(false);
+      });
   }, []);
 
   const table = useReactTable({
@@ -67,13 +92,14 @@ export default function LeadsTable() {
   });
 
   if (loading) return <div className="p-4 text-sm text-muted-foreground">Loading leads…</div>;
+  if (error) return <div className="p-4 text-sm text-red-600">{error}</div>;
 
   return (
     <div className="space-y-3">
       <input
         value={globalFilter}
         onChange={(e) => setGlobalFilter(e.target.value)}
-        placeholder="Search leads (dosh, topic, comment text)..."
+        placeholder="Search leads (dosh, problem, comment text)..."
         className="w-full rounded-md border px-3 py-2 text-sm"
       />
       <div className="overflow-x-auto rounded-md border">
@@ -109,8 +135,7 @@ export default function LeadsTable() {
       </div>
       <div className="flex items-center justify-between text-sm">
         <span>
-          Page {table.getState().pagination.pageIndex + 1} of{" "}
-          {table.getPageCount()}
+          Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount()}
         </span>
         <div className="space-x-2">
           <button

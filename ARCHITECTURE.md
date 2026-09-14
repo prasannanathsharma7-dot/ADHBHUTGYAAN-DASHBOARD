@@ -45,17 +45,21 @@ Redis (job queue) --> N worker processes (3-5) --> MongoDB (raw_comments)
   comment scraping, but still needs backoff on 429/503.
 
 ### Deduplication
-Same complaint gets posted across multiple videos by the same or
-different users. Create a compound unique index:
+YouTube's own comment ID (`cid`, stored as `comment_id`) is globally
+unique — use it directly as the unique index rather than computing a
+content hash:
 ```js
-db.raw_comments.createIndex(
-  { content_hash: 1 },
-  { unique: true }
-)
-// content_hash = sha256(normalized_text + author_channel_id)
+db.comments.createIndex({ comment_id: 1 }, { unique: true })
 ```
 Insert with `ordered: false` bulk writes so duplicate-key errors on
 individual documents don't halt the whole batch.
+
+**Update (current schema):** this pipeline now targets the isolated
+`astrology_intelligence.comments` collection with the full 50-node
+taxonomy — see `mongo/schema_and_aggregations.md` and `nlp/taxonomy.py`
+for the current, authoritative schema and field names. The `raw_comments`
+collection name in earlier drafts of this doc has been superseded by
+`comments`.
 
 ### Multilingual handling (Hinglish / Devanagari)
 - Tag language with `fasttext` (lid.176) or `langdetect` at scrape time —

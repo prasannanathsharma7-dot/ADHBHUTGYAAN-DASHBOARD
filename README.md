@@ -1,54 +1,136 @@
-# Adhbhutgyaan Dashboard
+# Adhbhutgyaan Astrology Intelligence Pipeline
 
-End-to-end intelligence pipeline for [adhbhutgyaan.com](https://adhbhutgyaan.com):
-scrapes public astrology comments/FAQs, classifies them with Claude
-(topic, dosh, urgency, commercial intent) via the Batch API, stores
-results in MongoDB Atlas, and surfaces Top-50 Problems / Top-50
-Complaints in a Next.js analytics dashboard.
+Proprietary intelligence & lead-generation engine for
+[adhbhutgyaan.com](https://adhbhutgyaan.com). Scrapes public YouTube
+comments from astrology channels, classifies each one against a
+50-node problem/grievance taxonomy using the Claude Batch API, stores
+results in an isolated MongoDB database, and surfaces Top-50 Problems
+/ Top-50 Vendor Complaints / high-intent leads in a locally-run
+Next.js dashboard.
 
-Full architecture, bottlenecks, and design rationale: see
-[`ARCHITECTURE.md`](./ARCHITECTURE.md).
+**This system runs 100% locally.** No cloud deployment, no scheduled
+cloud jobs — you run the scraper, the enrichment pipeline, and the
+dashboard on your own machine, on demand.
+
+Full architecture and bottleneck analysis: [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+Taxonomy definitions: [`nlp/taxonomy.py`](./nlp/taxonomy.py).
+
+## ⚠️ Database isolation — non-negotiable
+
+This entire pipeline is hard-locked to a MongoDB database named
+`astrology_intelligence`. It must **never** touch `adhbhutgyaan_prod`
+(the live production website database). This is enforced in code via
+`mongo/db_guard.py`, which every script imports — if you extend this
+pipeline, route any new MongoDB connection through `get_isolated_db()`
+rather than instantiating `MongoClient` directly. See that file for
+the exact guard logic.
 
 ## Structure
 
 ```
-scraper/        YouTube comment scraper (Celery worker + Actions-friendly runner)
-nlp/            Claude Batch API enrichment pipeline
-mongo/          Schema, indexes, aggregation pipelines
-dashboard/      Next.js App Router dashboard (API route + TanStack Table UI)
-.github/workflows/scraper.yml   Scheduled cloud run of the scraper + enrichment
+nlp/taxonomy.py                    The 50-node taxonomy — single source of truth
+nlp/batch_pipeline.py              Claude Batch API enrichment
+scraper/youtube_worker.py          Celery-based scraper (real video/channel metadata, no API key)
+scripts/run_local_pipeline.py      Simple sequential local runner (scrape -> enrich)
+mongo/db_guard.py                  Hard-enforced database isolation
+mongo/schema_and_aggregations.md   Schema, indexes, aggregation pipelines
+dashboard/                         Next.js dashboard (App Router)
 ```
 
-## Setup — 3 things you need to configure
+## Setup
 
-### 1. MongoDB Atlas connection string
-Copy `.env.example` to `.env` and set `MONGODB_URI` there for local runs.
-For the GitHub Actions scheduled workflow, add it as a **repo secret**
-instead (Settings -> Secrets and variables -> Actions -> New repository
-secret, name it `MONGODB_URI`) -- the workflow reads it from
-`secrets.MONGODB_URI`, never commit the real connection string to the repo.
+### 1. Environment variables
 
-### 2. Anthropic API key (Batch API)
-Same pattern: set `ANTHROPIC_API_KEY` in your local `.env` for manual
-runs of `nlp/batch_pipeline.py`, and as a **repo secret** named
-`ANTHROPIC_API_KEY` for the scheduled workflow.
+```bash
+cp .env.example .env
+# then edit .env — set MONGODB_URI and ANTHROPIC_API_KEY
 
-### 3. Vercel deployment (dashboard)
-The Next.js app lives in `dashboard/`. In Vercel: New Project -> Import
-this GitHub repo -> set **Root Directory** to `dashboard` -> add an
-environment variable `MONGODB_URI` in Vercel's project settings
-(Settings -> Environment Variables) -> Deploy.
+cp dashboard/.env.local.example dashboard/.env.local
+# then edit dashboard/.env.local — set MONGODB_URI
+```
 
-## Notes on the scheduled workflow
+Both `.env` and `dashboard/.env.local` are already in `.gitignore` —
+never commit real credentials.
 
-`.github/workflows/scraper.yml` runs on a daily cron and is meant for
-**steady incremental scraping** (a few hundred/thousand comments per
-run) via `scraper/run_scheduled.py`, which reads video IDs from
-`scraper/video_ids.txt`.
+### 2. Python dependencies
 
-It is **not** meant for the initial 1M-comment bulk load -- GitHub
-Actions runners are ephemeral (no persistent Redis broker across runs)
-and have job timeouts. Run the full Celery-based pipeline
-(`scraper/youtube_worker.py`) once from a machine you control, with a
-real Redis broker and a proxy pool, for the initial bulk scrape. See
-`ARCHITECTURE.md` for why.
+```bash
+python -m venv venv
+source venv/bin/activate    # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+playwright install chromium  # only needed for Cloudflare-protected portal scraping
+```
+
+### 3. Redis (only needed for the full-scale Celery run — see below)
+
+```bash
+# macOS
+brew install redis && brew services start redis
+# Linux
+sudo apt install redis-server && sudo systemctl start redis
+```
+
+### 4. Dashboard dependencies
+
+```bash
+cd dashboard
+npm install
+```
+
+## Running it
+
+### Quick local run (small/incremental scraping + enrichment)
+
+```bash
+# add video IDs to scraper/video_ids.txt first, one per line:
+#   video_id,channel_id
+
+python scripts/run_local_pipeline.py
+```
+
+This scrapes the listed videos and runs Claude Batch enrichment on
+whatever is un-enriched, all in one process — no Redis required.
+
+### Full-scale run (the real 1M-comment bulk load)
+
+For the initial large bulk scrape, run actual Celery workers so you
+get real concurrency, retries, and resumability:
+
+```bash
+# terminal 1 — start a worker
+celery -A scraper.youtube_worker worker --loglevel=info --concurrency=4
+
+# terminal 2 — enqueue videos (edit the video list in the __main__ block
+# of scraper/youtube_worker.py, or call enqueue_channel() from a script)
+python -c "from scraper.youtube_worker import enqueue_channel; enqueue_channel(['VIDEO_ID_1','VIDEO_ID_2'], channel_id='UC...')"
+```
+
+Then run enrichment separately once scraping has produced a healthy
+backlog:
+
+```bash
+python nlp/batch_pipeline.py
+```
+
+See `ARCHITECTURE.md` for proxy-pool and rate-limiting guidance — at
+real scale (1M comments) this is the actual bottleneck, not Claude or MongoDB.
+
+### Dashboard
+
+```bash
+cd dashboard
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000).
+
+## Ethics note: the crisis flag
+
+The taxonomy includes `SUICIDAL_DESPERATION_END_STAGE` and an
+`is_crisis_flag` boolean specifically so these comments can be routed
+*away* from the sales pipeline, not into it. The dashboard's API route
+and `CrisisQueue` component keep this as a separate, human-review-only
+view — it is deliberately excluded from `high_intent_leads`. If you
+extend the dashboard, keep that separation. Real people in genuine
+crisis showing up in your YouTube comments deserve a human response,
+not a puja upsell.
