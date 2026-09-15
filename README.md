@@ -79,6 +79,19 @@ npm install
 
 ## Running it
 
+### Easiest: double-click .bat files (no PowerShell typing needed)
+
+Once `.env` is set up (step 1 above) and dependencies are installed
+(step 2), you can skip PowerShell entirely:
+
+- **`run_scrape_test.bat`** — double-click to scrape only (no Claude API
+  cost). Good for testing that video IDs/DB connection work.
+- **`run_full_pipeline.bat`** — double-click to scrape + run Claude Batch
+  enrichment. This calls the Anthropic API and costs money.
+
+A console window opens, runs the script, and stays open (`pause`) so you
+can read the output before it closes.
+
 ### Quick local run (small/incremental scraping + enrichment)
 
 ```bash
