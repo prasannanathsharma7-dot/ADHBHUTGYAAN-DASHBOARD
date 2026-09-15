@@ -1,3 +1,4 @@
+python-dotenv>=1.0
 youtube-comment-downloader>=0.1.68
 pymongo>=4.7
 celery>=5.4

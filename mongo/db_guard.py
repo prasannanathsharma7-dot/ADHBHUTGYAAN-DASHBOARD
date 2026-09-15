@@ -8,8 +8,17 @@ someone hardcoding a db name somewhere else later.
 """
 
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.database import Database
+
+# Load .env from the repo root regardless of which directory the script
+# is run from (PowerShell users especially tend to run scripts from
+# various working directories) — os.environ alone does NOT read .env
+# files automatically, this is what actually does it.
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 ALLOWED_DB_NAME = "astrology_intelligence"
 # Real production database name, confirmed via Atlas (list-databases on
