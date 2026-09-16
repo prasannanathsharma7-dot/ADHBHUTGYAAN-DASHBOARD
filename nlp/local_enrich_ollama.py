@@ -4,9 +4,10 @@ multi-day throughput on a single laptop GPU. No Anthropic API cost.
 
 Three throughput optimizations vs. a naive JSON-output version:
   1. Small model (3B default) instead of 7B — 2-3x faster generation.
-  2. Compact pipe-delimited output instead of full JSON — the model
-     writes ~20 characters instead of ~150, which is most of the
-     per-request latency on a small local model.
+  2. Compact JSON output (single-letter keys) with Ollama's grammar-
+     constrained "format: json" mode — guarantees syntactically valid
+     JSON every time, which fixed a real failure mode where the small
+     model echoed template placeholders back instead of real values.
   3. Concurrent requests (--workers, default 3) — Ollama queues and
      interleaves requests on the GPU, so a few in flight at once beats
      one-at-a-time, though it won't scale linearly past your VRAM.
@@ -63,7 +64,7 @@ from nlp.taxonomy import (  # noqa: E402
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL = "qwen2.5:3b-instruct"
-MODEL_VERSION_TAG = f"ollama-{MODEL}-local-compact"
+MODEL_VERSION_TAG = f"ollama-{MODEL}-local-json"
 
 # Index maps derived from the shared taxonomy module — stays in sync
 # automatically if nlp/taxonomy.py ever changes.
@@ -76,44 +77,37 @@ SERVICE_BY_INDEX = {i: v for i, v in enumerate(RECOMMENDED_SERVICE_ENUM)}
 SYSTEM_PROMPT = f"""You classify Indian astrology YouTube comments. \
 {taxonomy_reference_text()}
 
-Reply with ONLY one line in this exact compact format, nothing else — \
-no labels, no explanation, no restating the format, just 9 numbers/letters \
-separated by pipes:
-P|S|D|E|U|I|G|R|C
+Return a JSON object with these exact keys, filled with YOUR classification \
+of the comment below — these are field definitions, not values to copy:
+- "p": primary problem number, an integer 1-50 from the numbered list above (pick the one that best matches)
+- "s": secondary problem number 1-50, or 0 if there is no clear second issue
+- "d": dosh index, an integer: {", ".join(f"{i}={v}" for i, v in DOSH_BY_INDEX.items())}
+- "e": sentiment index, an integer: {", ".join(f"{i}={v}" for i, v in SENTIMENT_BY_INDEX.items())}
+- "u": urgency, an integer 1-10
+- "i": intent index, an integer: {", ".join(f"{i}={v}" for i, v in INTENT_BY_INDEX.items())}
+- "g": signal index, an integer, 0 if none: {", ".join(f"{i}={v}" for i, v in SIGNAL_BY_INDEX.items())}
+- "r": service index, an integer: {", ".join(f"{i}={v}" for i, v in SERVICE_BY_INDEX.items())}
+- "c": crisis flag, true only for explicit suicidal intent, else false
 
-P = primary problem number (1-50 from the list above)
-S = secondary problem number, or 0 if none
-D = dosh index: {", ".join(f"{i}={v}" for i, v in DOSH_BY_INDEX.items())}
-E = sentiment index: {", ".join(f"{i}={v}" for i, v in SENTIMENT_BY_INDEX.items())}
-U = urgency 1-10
-I = intent index: {", ".join(f"{i}={v}" for i, v in INTENT_BY_INDEX.items())}
-G = signal index (1-4, see below), or 0 if none: {", ".join(f"{i}={v}" for i, v in SIGNAL_BY_INDEX.items())}
-R = service index: {", ".join(f"{i}={v}" for i, v in SERVICE_BY_INDEX.items())}
-C = crisis flag: Y only for explicit suicidal intent, else N
+Worked examples (comment -> your JSON):
+"Thank you so much sir, very helpful" -> {{"p":7,"s":0,"d":9,"e":4,"u":1,"i":3,"g":0,"r":6,"c":false}}
+"How can I contact you for consultation" -> {{"p":7,"s":0,"d":9,"e":4,"u":2,"i":0,"g":1,"r":5,"c":false}}
+"19 powerful but also paying karmic debts" -> {{"p":38,"s":0,"d":4,"e":4,"u":3,"i":3,"g":0,"r":6,"c":false}}
 
-Your entire reply must be exactly one line like this example, nothing else:
-9|0|9|4|3|3|0|5|N"""
+Now classify the real comment below. Output ONLY the JSON object, no other text."""
 
 
-def parse_compact(line: str) -> dict | None:
+def parse_compact(obj: dict) -> dict | None:
     try:
-        # Strip anything that isn't part of the 9-field pipe format —
-        # small models sometimes prepend "Reply:" or similar despite
-        # instructions not to.
-        cleaned = line.strip()
-        parts = cleaned.split("|")
-        if len(parts) != 9:
-            return None
-
-        def to_int(s: str) -> int:
-            digits = "".join(ch for ch in s if ch.isdigit() or ch == "-")
-            return int(digits) if digits else 0
-
-        p, s, d, e, u, i, g, r, c = parts
-        p_i, s_i, d_i, e_i, u_i, i_i, g_i, r_i = (
-            to_int(p), to_int(s), to_int(d), to_int(e),
-            to_int(u), to_int(i), to_int(g), to_int(r),
-        )
+        p_i = int(obj["p"])
+        s_i = int(obj.get("s", 0) or 0)
+        d_i = int(obj.get("d", 9))
+        e_i = int(obj.get("e", 4))
+        u_i = int(obj.get("u", 1))
+        i_i = int(obj.get("i", 3))
+        g_i = int(obj.get("g", 0) or 0)
+        r_i = int(obj.get("r", 6))
+        c = obj.get("c", False)
         if p_i not in PROBLEM_CODES:
             return None
         return {
@@ -125,15 +119,15 @@ def parse_compact(line: str) -> dict | None:
             "commercial_intent": INTENT_BY_INDEX.get(i_i, "NONE"),
             "commercial_signals": [SIGNAL_BY_INDEX[g_i]] if g_i in SIGNAL_BY_INDEX else [],
             "recommended_service": SERVICE_BY_INDEX.get(r_i, "None"),
-            "is_crisis_flag": c.strip().upper().startswith("Y"),
+            "is_crisis_flag": bool(c) if not isinstance(c, str) else c.strip().lower().startswith("t"),
             "exact_user_complaint": "",  # skipped in compact mode for speed
         }
-    except (ValueError, KeyError, IndexError):
+    except (ValueError, KeyError, TypeError):
         return None
 
 
 def classify_comment(text: str, debug: bool = False) -> dict | None:
-    prompt = f"{SYSTEM_PROMPT}\n\nComment:\n{text}\n\nReply:"
+    prompt = f"{SYSTEM_PROMPT}\n\nComment:\n{text}\n\nJSON:"
     try:
         resp = requests.post(
             OLLAMA_URL,
@@ -141,17 +135,22 @@ def classify_comment(text: str, debug: bool = False) -> dict | None:
                 "model": MODEL,
                 "prompt": prompt,
                 "stream": False,
-                "options": {"temperature": 0, "num_predict": 40},
+                "format": "json",  # grammar-constrained: Ollama guarantees valid JSON syntax
+                "options": {"temperature": 0, "num_predict": 60},
             },
             timeout=60,
         )
         resp.raise_for_status()
         raw = resp.json().get("response", "").strip()
-        candidate_lines = [l for l in raw.splitlines() if "|" in l]
-        line = candidate_lines[-1] if candidate_lines else raw
-        parsed = parse_compact(line)
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            if debug:
+                print(f"  [debug] invalid JSON from model: {raw!r}")
+            return None
+        parsed = parse_compact(obj)
         if parsed is None and debug:
-            print(f"  [debug] unparseable model output: {raw!r}")
+            print(f"  [debug] JSON parsed but fields invalid: {obj!r}")
         return parsed
     except (requests.RequestException,) as e:
         print(f"  request failed: {e}")
