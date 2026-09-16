@@ -79,7 +79,7 @@ SYSTEM_PROMPT = f"""You classify Indian astrology YouTube comments. \
 
 Return a JSON object with these exact keys, filled with YOUR classification \
 of the comment below — these are field definitions, not values to copy:
-- "p": primary problem number, an integer 1-50 from the numbered list above (pick the one that best matches)
+- "p": primary problem number, an integer 1-50 from the numbered list above (pick the closest match — NEVER output 0, every comment gets a number, use 7 if nothing else fits)
 - "s": secondary problem number 1-50, or 0 if there is no clear second issue
 - "d": dosh index, an integer: {", ".join(f"{i}={v}" for i, v in DOSH_BY_INDEX.items())}
 - "e": sentiment index, an integer: {", ".join(f"{i}={v}" for i, v in SENTIMENT_BY_INDEX.items())}
@@ -100,6 +100,13 @@ Now classify the real comment below. Output ONLY the JSON object, no other text.
 def parse_compact(obj: dict) -> dict | None:
     try:
         p_i = int(obj["p"])
+        if p_i == 0:
+            # Model couldn't confidently match a taxonomy code — this is
+            # common for casual/devotional comments with no real problem.
+            # Fall back to the low-signal category rather than discard
+            # the classification entirely (mirrors the Claude prompt's
+            # explicit fallback instruction in nlp/batch_pipeline.py).
+            p_i = 7  # CAREER_CONFUSION_LACK_OF_PURPOSE
         s_i = int(obj.get("s", 0) or 0)
         d_i = int(obj.get("d", 9))
         e_i = int(obj.get("e", 4))
