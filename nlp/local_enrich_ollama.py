@@ -76,7 +76,9 @@ SERVICE_BY_INDEX = {i: v for i, v in enumerate(RECOMMENDED_SERVICE_ENUM)}
 SYSTEM_PROMPT = f"""You classify Indian astrology YouTube comments. \
 {taxonomy_reference_text()}
 
-Reply with ONLY one line in this exact compact format, nothing else:
+Reply with ONLY one line in this exact compact format, nothing else — \
+no labels, no explanation, no restating the format, just 9 numbers/letters \
+separated by pipes:
 P|S|D|E|U|I|G|R|C
 
 P = primary problem number (1-50 from the list above)
@@ -89,18 +91,31 @@ G = signal index (1-4, see below), or 0 if none: {", ".join(f"{i}={v}" for i, v 
 R = service index: {", ".join(f"{i}={v}" for i, v in SERVICE_BY_INDEX.items())}
 C = crisis flag: Y only for explicit suicidal intent, else N
 
-Example reply: 9|0|9|4|3|3|0|5|N"""
+Your entire reply must be exactly one line like this example, nothing else:
+9|0|9|4|3|3|0|5|N"""
 
 
 def parse_compact(line: str) -> dict | None:
     try:
-        parts = line.strip().split("|")
+        # Strip anything that isn't part of the 9-field pipe format —
+        # small models sometimes prepend "Reply:" or similar despite
+        # instructions not to.
+        cleaned = line.strip()
+        parts = cleaned.split("|")
         if len(parts) != 9:
             return None
+
+        def to_int(s: str) -> int:
+            digits = "".join(ch for ch in s if ch.isdigit() or ch == "-")
+            return int(digits) if digits else 0
+
         p, s, d, e, u, i, g, r, c = parts
         p_i, s_i, d_i, e_i, u_i, i_i, g_i, r_i = (
-            int(p), int(s), int(d), int(e), int(u), int(i), int(g), int(r)
+            to_int(p), to_int(s), to_int(d), to_int(e),
+            to_int(u), to_int(i), to_int(g), to_int(r),
         )
+        if p_i not in PROBLEM_CODES:
+            return None
         return {
             "primary_problem_code": PROBLEM_CODES[p_i],
             "secondary_problem_code": PROBLEM_CODES.get(s_i) if s_i else None,
@@ -117,7 +132,7 @@ def parse_compact(line: str) -> dict | None:
         return None
 
 
-def classify_comment(text: str) -> dict | None:
+def classify_comment(text: str, debug: bool = False) -> dict | None:
     prompt = f"{SYSTEM_PROMPT}\n\nComment:\n{text}\n\nReply:"
     try:
         resp = requests.post(
@@ -126,17 +141,18 @@ def classify_comment(text: str) -> dict | None:
                 "model": MODEL,
                 "prompt": prompt,
                 "stream": False,
-                "options": {"temperature": 0, "num_predict": 30},
+                "options": {"temperature": 0, "num_predict": 40},
             },
             timeout=60,
         )
         resp.raise_for_status()
         raw = resp.json().get("response", "").strip()
-        # Model sometimes adds a stray label before the pipe-line; take
-        # the last line that actually looks like our format.
         candidate_lines = [l for l in raw.splitlines() if "|" in l]
         line = candidate_lines[-1] if candidate_lines else raw
-        return parse_compact(line)
+        parsed = parse_compact(line)
+        if parsed is None and debug:
+            print(f"  [debug] unparseable model output: {raw!r}")
+        return parsed
     except (requests.RequestException,) as e:
         print(f"  request failed: {e}")
         return None
@@ -147,6 +163,7 @@ def main():
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--workers", type=int, default=3, help="Concurrent requests to Ollama")
     parser.add_argument("--batch-write-size", type=int, default=50)
+    parser.add_argument("--debug", action="store_true", help="Print raw model output when parsing fails")
     args = parser.parse_args()
 
     db = get_isolated_db()
@@ -166,7 +183,7 @@ def main():
     start = time.time()
 
     def worker(doc):
-        parsed = classify_comment(doc.get("comment_text", ""))
+        parsed = classify_comment(doc.get("comment_text", ""), debug=args.debug)
         if parsed is None:
             with write_lock:
                 fail_count[0] += 1
