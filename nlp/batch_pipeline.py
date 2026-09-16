@@ -188,8 +188,17 @@ def parse_and_apply_results(batch_id: str, comment_texts_by_id: dict[str, str]):
             continue
 
         text_block = result.result.message.content[0].text
+        # Sonnet occasionally wraps output in a markdown fence despite
+        # instructions not to. Strip it before parsing rather than
+        # sending valid classifications to dead_letter over formatting.
+        cleaned = text_block.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```")[1]
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+            cleaned = cleaned.strip()
         try:
-            parsed = json.loads(text_block)
+            parsed = json.loads(cleaned)
             validate(instance=parsed, schema=ANALYSIS_SCHEMA)
         except (json.JSONDecodeError, ValidationError) as e:
             dead_letter_docs.append(
