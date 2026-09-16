@@ -137,6 +137,27 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+## Free enrichment option (no Anthropic API cost)
+
+`nlp/local_enrich_ollama.py` classifies comments using a local open-source
+model via [Ollama](https://ollama.com) instead of Claude — zero API spend,
+runs on your own GPU. Trade-off: slower (a few comments/second on a laptop
+GPU) and less accurate, especially on `is_crisis_flag` — treat its output
+as a rough pass, not a substitute for `nlp/batch_pipeline.py` (Claude) at
+real scale or on anything safety-sensitive.
+
+```
+# one-time setup
+# 1. install Ollama: https://ollama.com/download
+# 2. ollama pull qwen2.5:7b-instruct
+
+python nlp\local_enrich_ollama.py --limit 20000
+```
+
+Good for a large *free* first pass on a big backlog; switch to the Claude
+batch pipeline for the comments that matter most (high-urgency, crisis-
+adjacent, or anything informing a real business decision).
+
 ## Ethics note: the crisis flag
 
 The taxonomy includes `SUICIDAL_DESPERATION_END_STAGE` and an
