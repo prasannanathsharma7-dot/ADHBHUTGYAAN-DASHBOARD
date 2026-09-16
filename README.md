@@ -139,24 +139,32 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ## Free enrichment option (no Anthropic API cost)
 
-`nlp/local_enrich_ollama.py` classifies comments using a local open-source
-model via [Ollama](https://ollama.com) instead of Claude — zero API spend,
-runs on your own GPU. Trade-off: slower (a few comments/second on a laptop
-GPU) and less accurate, especially on `is_crisis_flag` — treat its output
-as a rough pass, not a substitute for `nlp/batch_pipeline.py` (Claude) at
-real scale or on anything safety-sensitive.
+`nlp/local_enrich_ollama.py` classifies comments using a small local
+model via [Ollama](https://ollama.com) instead of Claude — zero API
+spend, runs on your own GPU, uses a compact output format and a few
+concurrent requests so it's fast enough for large free runs. Trade-off:
+less accurate than Claude, especially on `is_crisis_flag` — treat its
+output as a rough pass, not a substitute for `nlp/batch_pipeline.py`
+(Claude) on anything safety-sensitive or high-stakes.
 
 ```
 # one-time setup
 # 1. install Ollama: https://ollama.com/download
-# 2. ollama pull qwen2.5:7b-instruct
+# 2. ollama pull qwen2.5:3b-instruct
 
-python nlp\local_enrich_ollama.py --limit 20000
+# ALWAYS test throughput on a small slice first — the script prints
+# your measured rate and the real ETA for 1M comments at that rate:
+python nlp\local_enrich_ollama.py --limit 500
+
+# then the real run, sized to what you measured:
+python nlp\local_enrich_ollama.py --workers 4
 ```
 
-Good for a large *free* first pass on a big backlog; switch to the Claude
-batch pipeline for the comments that matter most (high-urgency, crisis-
-adjacent, or anything informing a real business decision).
+It's fully resumable — if the laptop sleeps, restarts, or you stop the
+script, re-running the same command picks up exactly where it left off.
+For a multi-day unattended run on Windows, turn off sleep while plugged
+in (Settings > System > Power & battery > Screen and sleep) and leave it
+plugged in.
 
 ## Ethics note: the crisis flag
 

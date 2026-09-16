@@ -1,145 +1,207 @@
 """
-FREE local enrichment pipeline using Ollama — no Anthropic API cost.
+FREE local enrichment pipeline using Ollama — optimized for sustained
+multi-day throughput on a single laptop GPU. No Anthropic API cost.
 
-Runs a small open-source model on your own GPU via Ollama. Zero API
-spend, but meaningfully slower and less accurate than Claude, especially
-on nuanced fields (is_crisis_flag, commercial_intent). Use this for
-large free-tier runs where budget is the hard constraint; use
-nlp/batch_pipeline.py (Claude) when accuracy matters more, especially
-for the crisis flag.
+Three throughput optimizations vs. a naive JSON-output version:
+  1. Small model (3B default) instead of 7B — 2-3x faster generation.
+  2. Compact pipe-delimited output instead of full JSON — the model
+     writes ~20 characters instead of ~150, which is most of the
+     per-request latency on a small local model.
+  3. Concurrent requests (--workers, default 3) — Ollama queues and
+     interleaves requests on the GPU, so a few in flight at once beats
+     one-at-a-time, though it won't scale linearly past your VRAM.
+
+Honest throughput note: whether 10 lakh (1M) comments finishes in your
+target window depends entirely on your GPU. Run --limit 500 first,
+check the printed rate, and multiply out the real ETA before committing
+a laptop to a multi-day unattended run. This script IS resumable —
+if the laptop sleeps, restarts, or you stop it, re-running the same
+command picks up exactly where it left off (it only ever queries
+comments still missing `analysis`).
+
+For an unattended multi-day run on Windows:
+  - Settings > System > Power & battery > Screen and sleep > set both
+    "when plugged in" timers to Never.
+  - Keep the laptop plugged in and on a surface that won't overheat it.
 
 Setup (one-time):
-    1. Install Ollama: https://ollama.com/download (Windows installer)
-    2. Pull a model:  ollama pull qwen2.5:7b-instruct
-       (7B fits comfortably on a laptop RTX GPU; try qwen2.5:14b-instruct
-       if you have 12GB+ VRAM for better accuracy, slower speed)
-    3. Ollama runs as a background service automatically after install —
-       no separate "start server" step needed on Windows.
+    1. Install Ollama: https://ollama.com/download
+    2. ollama pull qwen2.5:3b-instruct
+       (try qwen2.5:1.5b-instruct if this is still too slow after
+       testing — faster but noticeably less accurate)
 
 Usage:
-    python nlp/local_enrich_ollama.py --limit 20000
-    (omit --limit to process everything un-enriched — will take a long
-    time at full 10-lakh scale; see the honest throughput note below)
+    # ALWAYS test throughput first on a small slice:
+    python nlp/local_enrich_ollama.py --limit 500
+
+    # then the real run, sized to your measured rate:
+    python nlp/local_enrich_ollama.py --workers 4
 """
 
 import argparse
 import json
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from threading import Lock
 
 import requests
-from bson import ObjectId
 from pymongo import UpdateOne
 
 sys.path.append(".")
 from mongo.db_guard import get_isolated_db  # noqa: E402
 from nlp.taxonomy import (  # noqa: E402
-    build_analysis_json_schema,
-    taxonomy_reference_text,
+    PROBLEM_CODES,
     DOSH_ENUM,
     SENTIMENT_ENUM,
     COMMERCIAL_INTENT_ENUM,
     COMMERCIAL_SIGNALS_ENUM,
     RECOMMENDED_SERVICE_ENUM,
+    taxonomy_reference_text,
 )
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "qwen2.5:7b-instruct"  # change to match what you `ollama pull`ed
-MODEL_VERSION_TAG = f"ollama-{MODEL}-local"
+MODEL = "qwen2.5:3b-instruct"
+MODEL_VERSION_TAG = f"ollama-{MODEL}-local-compact"
 
-ANALYSIS_SCHEMA = build_analysis_json_schema()
+# Index maps derived from the shared taxonomy module — stays in sync
+# automatically if nlp/taxonomy.py ever changes.
+DOSH_BY_INDEX = {i: v for i, v in enumerate(DOSH_ENUM)}
+SENTIMENT_BY_INDEX = {i: v for i, v in enumerate(SENTIMENT_ENUM)}
+INTENT_BY_INDEX = {i: v for i, v in enumerate(COMMERCIAL_INTENT_ENUM)}
+SIGNAL_BY_INDEX = {i + 1: v for i, v in enumerate(COMMERCIAL_SIGNALS_ENUM)}  # 1-indexed, 0=none
+SERVICE_BY_INDEX = {i: v for i, v in enumerate(RECOMMENDED_SERVICE_ENUM)}
 
-SYSTEM_PROMPT = f"""You are a classification engine for an Indian astrology \
-business's comment-analysis pipeline. You will be given a single public \
-comment, possibly in Hindi, Hinglish, or English.
-
+SYSTEM_PROMPT = f"""You classify Indian astrology YouTube comments. \
 {taxonomy_reference_text()}
 
-Classify strictly per the JSON schema. primary_dosh one of: \
-{", ".join(DOSH_ENUM)}. sentiment one of: {", ".join(SENTIMENT_ENUM)}. \
-commercial_intent one of: {", ".join(COMMERCIAL_INTENT_ENUM)}. \
-commercial_signals only from: {", ".join(COMMERCIAL_SIGNALS_ENUM)}. \
-recommended_service one of: {", ".join(RECOMMENDED_SERVICE_ENUM)}.
+Reply with ONLY one line in this exact compact format, nothing else:
+P|S|D|E|U|I|G|R|C
 
-is_crisis_flag must be true ONLY for explicit suicidal intent — be \
-conservative, general sadness is not a crisis flag.
+P = primary problem number (1-50 from the list above)
+S = secondary problem number, or 0 if none
+D = dosh index: {", ".join(f"{i}={v}" for i, v in DOSH_BY_INDEX.items())}
+E = sentiment index: {", ".join(f"{i}={v}" for i, v in SENTIMENT_BY_INDEX.items())}
+U = urgency 1-10
+I = intent index: {", ".join(f"{i}={v}" for i, v in INTENT_BY_INDEX.items())}
+G = signal index (1-4, see below), or 0 if none: {", ".join(f"{i}={v}" for i, v in SIGNAL_BY_INDEX.items())}
+R = service index: {", ".join(f"{i}={v}" for i, v in SERVICE_BY_INDEX.items())}
+C = crisis flag: Y only for explicit suicidal intent, else N
 
-Respond with ONLY a single valid JSON object. No markdown, no preamble."""
+Example reply: 9|0|9|4|3|3|0|5|N"""
+
+
+def parse_compact(line: str) -> dict | None:
+    try:
+        parts = line.strip().split("|")
+        if len(parts) != 9:
+            return None
+        p, s, d, e, u, i, g, r, c = parts
+        p_i, s_i, d_i, e_i, u_i, i_i, g_i, r_i = (
+            int(p), int(s), int(d), int(e), int(u), int(i), int(g), int(r)
+        )
+        return {
+            "primary_problem_code": PROBLEM_CODES[p_i],
+            "secondary_problem_code": PROBLEM_CODES.get(s_i) if s_i else None,
+            "primary_dosh": DOSH_BY_INDEX.get(d_i, "None"),
+            "sentiment": SENTIMENT_BY_INDEX.get(e_i, "Curious"),
+            "urgency_score": max(1, min(10, u_i)),
+            "commercial_intent": INTENT_BY_INDEX.get(i_i, "NONE"),
+            "commercial_signals": [SIGNAL_BY_INDEX[g_i]] if g_i in SIGNAL_BY_INDEX else [],
+            "recommended_service": SERVICE_BY_INDEX.get(r_i, "None"),
+            "is_crisis_flag": c.strip().upper().startswith("Y"),
+            "exact_user_complaint": "",  # skipped in compact mode for speed
+        }
+    except (ValueError, KeyError, IndexError):
+        return None
 
 
 def classify_comment(text: str) -> dict | None:
-    prompt = (
-        f"{SYSTEM_PROMPT}\n\nComment:\n{text}\n\n"
-        f"JSON Schema:\n{json.dumps(ANALYSIS_SCHEMA)}\n\nJSON:"
-    )
+    prompt = f"{SYSTEM_PROMPT}\n\nComment:\n{text}\n\nReply:"
     try:
         resp = requests.post(
             OLLAMA_URL,
-            json={"model": MODEL, "prompt": prompt, "stream": False, "format": "json"},
+            json={
+                "model": MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"temperature": 0, "num_predict": 30},
+            },
             timeout=60,
         )
         resp.raise_for_status()
         raw = resp.json().get("response", "").strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        return json.loads(raw.strip())
-    except (requests.RequestException, json.JSONDecodeError, IndexError) as e:
-        print(f"  classify failed: {e}")
+        # Model sometimes adds a stray label before the pipe-line; take
+        # the last line that actually looks like our format.
+        candidate_lines = [l for l in raw.splitlines() if "|" in l]
+        line = candidate_lines[-1] if candidate_lines else raw
+        return parse_compact(line)
+    except (requests.RequestException,) as e:
+        print(f"  request failed: {e}")
         return None
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--limit", type=int, default=None, help="Max comments to process this run")
+    parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--workers", type=int, default=3, help="Concurrent requests to Ollama")
     parser.add_argument("--batch-write-size", type=int, default=50)
     args = parser.parse_args()
 
     db = get_isolated_db()
     comments_col = db.comments
 
-    cursor = comments_col.find({"analysis": None})
+    cursor = comments_col.find({"analysis": None}, {"comment_text": 1})
     if args.limit:
         cursor = cursor.limit(args.limit)
-
     docs = list(cursor)
     total = len(docs)
-    print(f"Found {total} un-enriched comments. Starting local classification...\n")
+    print(f"Found {total} un-enriched comments. Model={MODEL}, workers={args.workers}\n")
 
-    updates = []
+    write_lock = Lock()
+    pending_updates: list[UpdateOne] = []
+    done_count = [0]
+    fail_count = [0]
     start = time.time()
-    for i, doc in enumerate(docs, 1):
+
+    def worker(doc):
         parsed = classify_comment(doc.get("comment_text", ""))
         if parsed is None:
-            continue
-
+            with write_lock:
+                fail_count[0] += 1
+            return
         parsed["analyzed_at"] = datetime.now(timezone.utc)
         parsed["model_version"] = MODEL_VERSION_TAG
-        parsed.setdefault("lead_status", "NEW")
+        parsed["lead_status"] = "NEW"
+        with write_lock:
+            pending_updates.append(UpdateOne({"_id": doc["_id"]}, {"$set": {"analysis": parsed}}))
+            done_count[0] += 1
+            if len(pending_updates) >= args.batch_write_size:
+                comments_col.bulk_write(pending_updates, ordered=False)
+                pending_updates.clear()
+            if done_count[0] % 25 == 0 or done_count[0] == total:
+                elapsed = time.time() - start
+                rate = done_count[0] / elapsed if elapsed > 0 else 0
+                remaining_sec = (total - done_count[0]) / rate if rate > 0 else float("inf")
+                print(
+                    f"  {done_count[0]}/{total} done ({fail_count[0]} failed) | "
+                    f"{rate:.2f}/sec | ETA {remaining_sec/3600:.1f}h remaining this run"
+                )
 
-        updates.append(
-            UpdateOne({"_id": doc["_id"]}, {"$set": {"analysis": parsed}})
-        )
+    with ThreadPoolExecutor(max_workers=args.workers) as pool:
+        futures = [pool.submit(worker, doc) for doc in docs]
+        for _ in as_completed(futures):
+            pass
 
-        if len(updates) >= args.batch_write_size:
-            comments_col.bulk_write(updates, ordered=False)
-            updates = []
+    if pending_updates:
+        comments_col.bulk_write(pending_updates, ordered=False)
 
-        if i % 25 == 0 or i == total:
-            elapsed = time.time() - start
-            rate = i / elapsed if elapsed > 0 else 0
-            remaining = (total - i) / rate if rate > 0 else float("inf")
-            print(
-                f"  {i}/{total} done | {rate:.2f}/sec | "
-                f"~{remaining/60:.0f} min remaining this run"
-            )
-
-    if updates:
-        comments_col.bulk_write(updates, ordered=False)
-
-    print(f"\nDone. Processed {total} comments in {(time.time()-start)/60:.1f} minutes.")
+    elapsed_min = (time.time() - start) / 60
+    print(f"\nDone. {done_count[0]} classified, {fail_count[0]} failed, in {elapsed_min:.1f} min.")
+    if done_count[0] > 0:
+        rate = done_count[0] / (elapsed_min * 60)
+        print(f"Measured rate: {rate:.2f}/sec — at this rate, 1,000,000 comments = {1_000_000/rate/86400:.1f} days.")
 
 
 if __name__ == "__main__":
