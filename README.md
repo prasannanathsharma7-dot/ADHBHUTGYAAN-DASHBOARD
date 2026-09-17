@@ -35,6 +35,7 @@ scripts/run_local_pipeline.py      Simple sequential local runner (scrape -> enr
 mongo/db_guard.py                  Hard-enforced database isolation
 mongo/schema_and_aggregations.md   Schema, indexes, aggregation pipelines
 dashboard/                         Next.js dashboard (App Router)
+nlp/prefilter.py                   Free rule-based pass before enrichment (see below)
 ```
 
 ## Setup
@@ -165,6 +166,30 @@ script, re-running the same command picks up exactly where it left off.
 For a multi-day unattended run on Windows, turn off sleep while plugged
 in (Settings > System > Power & battery > Screen and sleep) and leave it
 plugged in.
+
+## Optional: rule-based pre-filter (saves Claude/Ollama cost on obvious junk)
+
+`nlp/prefilter.py` runs before either enrichment script and marks purely
+devotional/greeting/emoji-only comments (e.g. "Jai Shri Ram 🙏" with
+nothing else) as low-signal, using the exact same fallback shape
+`nlp/batch_pipeline.py` already uses for junk — for free, instantly.
+Both enrichment scripts query `{"analysis": None}`, so anything this
+marks is automatically skipped by both; no changes to either script.
+
+```bash
+python nlp/prefilter.py --dry-run   # see counts first, writes nothing
+python nlp/prefilter.py             # apply
+```
+
+**It is deliberately conservative on purpose.** It only skips content
+that is *purely* devotional/greeting/emoji — never based on length or
+on whether an astrology keyword is present — because a keyword list
+can never fully enumerate every way someone might express real
+distress, and this pipeline's crisis handling (below) only runs inside
+the real classifiers. See the safety note at the top of the file
+before changing what counts as skippable, and run
+`tests/test_prefilter.py` (`pytest tests/`) after any change — it
+includes the crisis-phrasing cases that must never be skipped.
 
 ## Ethics note: the crisis flag
 
