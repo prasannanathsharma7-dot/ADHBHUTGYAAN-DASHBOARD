@@ -168,6 +168,26 @@ still the placeholder — force one explicitly with
 `python scripts\run_everything.py --enrich-with ollama` (or `claude`,
 or `skip`).
 
+## Clearing old un-enriched backlog
+
+If you're carrying an old pile of raw, never-classified comments (from
+before discovery.py/prefilter.py existed) that's dominating the
+dashboard numbers without reflecting what the new pipeline actually
+produces:
+
+```bash
+python scripts/purge_unenriched.py                  # stats + backup only, deletes nothing
+python scripts/purge_unenriched.py --sample-first 50 # + export 50 random ones to eyeball first
+python scripts/purge_unenriched.py --confirm         # actually delete
+```
+
+Always backs up what it's about to remove to `backups/` first, no flag
+needed. **Only removes comments where `analysis` is still `None`** —
+anything already classified (real Claude Batch spend) is never
+touched. Comments removed this way were never crisis-screened in the
+first place (that only happens during enrichment), so nothing that
+had already been flagged is lost.
+
 ## Automated discovery (no manual video IDs)
 
 `scraper/discovery.py` finds videos worth scraping on its own — you

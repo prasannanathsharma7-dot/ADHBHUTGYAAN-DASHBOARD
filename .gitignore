@@ -7,3 +7,5 @@ dashboard/.env.local
 logs/
 audit_sample.csv
 audit_crisis.csv
+backups/
+purge_sample_review.csv
