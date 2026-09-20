@@ -42,6 +42,7 @@ scraper/discovery.py               Auto-finds outlier videos so video_ids.txt fi
 scraper/transcripts.py             Fetches what videos actually said (yt-dlp captions)
 nlp/gap_analysis.py                Measures whether a comment's question was answered in the video
 nlp/run_gap_analysis.py            Applies gap analysis across classified comments (see below)
+scripts/run_everything.py          Full pipeline, one command, retries on failure (see below)
 ```
 
 ## Setup
@@ -144,6 +145,28 @@ npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
+
+## Run everything automatically (no typing each step)
+
+`run_everything.bat` — double-click to run all six steps in order
+(discovery → scrape → prefilter → enrich → transcripts → gap
+analysis), with automatic retry (3 attempts, growing delay) if any
+step fails. A step that still fails doesn't stop the run — later
+steps that can still make progress go ahead anyway.
+
+Every run's full output is saved to `logs\run_TIMESTAMP.log`, so you
+can check what happened even if you weren't watching.
+
+By default it runs once and exits. To have it repeat on its own, edit
+`run_everything.bat` and add `--repeat-every-hours 6` (or any number)
+to the last python line — it will then sleep and run again forever,
+until you close the window.
+
+Enrichment auto-detects Claude vs. the free Ollama option based on
+whether `ANTHROPIC_API_KEY` in `.env` looks like a real key or is
+still the placeholder — force one explicitly with
+`python scripts\run_everything.py --enrich-with ollama` (or `claude`,
+or `skip`).
 
 ## Automated discovery (no manual video IDs)
 
