@@ -9,3 +9,5 @@ jsonschema>=4.22
 requests>=2.32
 curl_cffi>=0.7
 playwright>=1.45
+yt-dlp>=2024.8.6
+# --- Channel/search discovery (scraper/discovery.py) needs only yt-dlp above.

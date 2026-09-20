@@ -1,4 +1,8 @@
-# One entry per line: video_id,channel_id
-# channel_id is optional (used for grouping/analytics), video_id is required.
-# VIDEO_ID_1,UC_EXAMPLE_CHANNEL_ID
-# VIDEO_ID_2,UC_EXAMPLE_CHANNEL_ID
+# Auto-populated by scraper/discovery.py -- do not edit by hand.
+# Run: python scraper/discovery.py
+# It finds outlier videos from your seed channels + search keywords
+# (edit those two lists at the top of discovery.py) and appends new
+# entries below in this format: video_id,channel_id
+#
+# scripts/run_local_pipeline.py and the .bat files read this file
+# exactly as before -- nothing else changes.

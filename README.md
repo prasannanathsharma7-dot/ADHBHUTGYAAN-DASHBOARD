@@ -38,6 +38,7 @@ dashboard/                         Next.js dashboard (App Router)
 nlp/prefilter.py                   Free rule-based pass before enrichment (see below)
 scripts/build_audit_sample.py      Samples classified comments for a human accuracy check
 scripts/compute_audit_results.py   Scores the filled-in audit sample (see below)
+scraper/discovery.py               Auto-finds outlier videos so video_ids.txt fills itself (see below)
 ```
 
 ## Setup
@@ -98,8 +99,9 @@ can read the output before it closes.
 ### Quick local run (small/incremental scraping + enrichment)
 
 ```bash
-# add video IDs to scraper/video_ids.txt first, one per line:
-#   video_id,channel_id
+# populate scraper/video_ids.txt automatically -- see "Automated
+# discovery" below instead of editing this file by hand:
+python scraper/discovery.py
 
 python scripts/run_local_pipeline.py
 ```
@@ -139,6 +141,42 @@ npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
+
+## Automated discovery (no manual video IDs)
+
+`scraper/discovery.py` finds videos worth scraping on its own — you
+never paste in a link or an ID.
+
+```bash
+python scraper/discovery.py --dry-run   # see what it would find, writes nothing
+python scraper/discovery.py             # append discovered videos to video_ids.txt
+```
+
+Two sources, both against YouTube's own public pages via `yt-dlp`
+(same category of tool as `youtube_comment_downloader`, already used
+elsewhere in this repo):
+
+- **Channel-based**: checks each seed channel's own recent videos
+  against *that channel's own* median views/hour, and flags anything
+  running well ahead of its own normal pace (default: 2.5x). A small
+  channel's normal day and a big channel's normal day are never
+  compared against each other.
+- **Search-based**: runs the Hindi query clusters below and pulls
+  matching results directly, above a minimum view floor.
+
+Edit `SEED_CHANNELS` and `SEARCH_QUERIES` at the top of the file for
+your niche — the handles there are a starting point, not verified;
+the script tells you if a handle resolves to zero videos.
+
+```python
+SEED_CHANNELS = ["AstroArunPandit", "DrJaiMadaan", "GrahonKaKhel", ...]
+SEARCH_QUERIES = ["कुंडली दोष निवारण", "शनि साढ़ेसाती असली उपाय", ...]
+```
+
+`tests/test_discovery.py` covers the outlier math itself (what counts
+as an outlier, age cutoffs, the minimum-views floor) with synthetic
+data — the only part of this script that doesn't need a live YouTube
+connection to test.
 
 ## Free enrichment option (no Anthropic API cost)
 
