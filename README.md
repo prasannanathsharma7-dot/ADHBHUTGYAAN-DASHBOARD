@@ -36,6 +36,8 @@ mongo/db_guard.py                  Hard-enforced database isolation
 mongo/schema_and_aggregations.md   Schema, indexes, aggregation pipelines
 dashboard/                         Next.js dashboard (App Router)
 nlp/prefilter.py                   Free rule-based pass before enrichment (see below)
+scripts/build_audit_sample.py      Samples classified comments for a human accuracy check
+scripts/compute_audit_results.py   Scores the filled-in audit sample (see below)
 ```
 
 ## Setup
@@ -190,6 +192,34 @@ the real classifiers. See the safety note at the top of the file
 before changing what counts as skippable, and run
 `tests/test_prefilter.py` (`pytest tests/`) after any change — it
 includes the crisis-phrasing cases that must never be skipped.
+
+## Checking classifier accuracy (do this before trusting the numbers)
+
+ARCHITECTURE.md already flags this: "Sample-audit ~200 classified
+comments by hand early on and adjust the prompt — don't trust the
+first pass blindly, this number directly drives your business
+decisions." These two scripts do that:
+
+```bash
+python scripts/build_audit_sample.py --out audit_sample.csv --n 200
+# open audit_sample.csv in Excel/Sheets, fill in every human_* column
+# for every row (including ones you agree with -- blanks are treated
+# as "not reviewed", never as a match)
+python scripts/compute_audit_results.py --in audit_sample.csv
+```
+
+`human_agrees_crisis_flag` needs its own pass over a *crisis-only*
+sample too, since a plain random sample will contain very few (or
+zero) `is_crisis_flag=True` comments to check:
+
+```bash
+python scripts/build_audit_sample.py --crisis-only --n 50 --out audit_crisis.csv
+python scripts/compute_audit_results.py --in audit_crisis.csv
+```
+
+Any disagreement on `is_crisis_flag` is printed out in full — a
+missed crisis is not a rounding error, and this is the one number in
+the whole pipeline that should never just be a percentage you skim.
 
 ## Ethics note: the crisis flag
 
