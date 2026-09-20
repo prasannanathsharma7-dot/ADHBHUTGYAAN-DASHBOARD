@@ -39,6 +39,9 @@ nlp/prefilter.py                   Free rule-based pass before enrichment (see b
 scripts/build_audit_sample.py      Samples classified comments for a human accuracy check
 scripts/compute_audit_results.py   Scores the filled-in audit sample (see below)
 scraper/discovery.py               Auto-finds outlier videos so video_ids.txt fills itself (see below)
+scraper/transcripts.py             Fetches what videos actually said (yt-dlp captions)
+nlp/gap_analysis.py                Measures whether a comment's question was answered in the video
+nlp/run_gap_analysis.py            Applies gap analysis across classified comments (see below)
 ```
 
 ## Setup
@@ -177,6 +180,45 @@ SEARCH_QUERIES = ["कुंडली दोष निवारण", "शनि 
 as an outlier, age cutoffs, the minimum-views floor) with synthetic
 data — the only part of this script that doesn't need a live YouTube
 connection to test.
+
+## Measuring what the video actually left unanswered
+
+Until now "unanswered question" was an assumption. This measures it:
+pull the video's own transcript, then check whether the terms in a
+viewer's question were actually spoken about.
+
+```bash
+python scraper/transcripts.py       # fetch captions for videos that have comments
+python nlp/run_gap_analysis.py --dry-run   # see the status breakdown, writes nothing
+python nlp/run_gap_analysis.py      # store a `gap` field on each comment
+```
+
+This adds a `gap` subdocument per comment (`status`, `coverage`,
+`matched_terms`, `missing_terms`) — it never modifies `analysis` and
+never deletes anything.
+
+**Three things worth understanding before using the numbers:**
+
+- **It's keyword coverage, not comprehension.** It answers "were these
+  concepts spoken about", not "was this person's question answered
+  well". `likely_unanswered` is a lead to look at, not a verdict.
+- **No transcript ⇒ `unknown`, never `unanswered`.** Missing data is
+  not evidence of a gap. Exclude `unknown` from any gap percentage you
+  report, or you're counting silence as a finding. Many Hindi astrology
+  videos have only auto-generated captions, which are noisy; some have
+  none at all.
+- **Cross-script matching is what makes it work.** Comments are usually
+  Hinglish ("shani sade sati") while transcripts are Devanagari ("शनि
+  साढ़ेसाती"). `TERM_ALIASES` in `nlp/gap_analysis.py` maps the domain
+  vocabulary across both. Without it every comment would look
+  unanswered. When you notice a term being missed, add it there — the
+  script warns you if too many comments are falling back to plain word
+  overlap.
+
+**Crisis comments are excluded entirely** (`is_crisis_flag = True` are
+skipped, never scored). Someone in real distress is not a content gap
+to mine for a video hook — they belong in the existing human-review
+CrisisQueue and nowhere else.
 
 ## Free enrichment option (no Anthropic API cost)
 
