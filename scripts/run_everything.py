@@ -34,6 +34,10 @@ import argparse
 import os
 import subprocess
 import sys
+
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 import time
 from datetime import datetime, timezone
 
@@ -57,7 +61,7 @@ def run_step(logfile, name: str, cmd: list) -> bool:
         log(logfile, f"\n{'=' * 70}\n{name}  (attempt {attempt}/{MAX_RETRIES})\n{'=' * 70}")
         process = subprocess.Popen(
             cmd, cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1,
+            text=True, encoding="utf-8", errors="replace", bufsize=1,
         )
         for line in process.stdout:
             log(logfile, line.rstrip())

@@ -37,6 +37,14 @@ import os
 import statistics
 import subprocess
 import sys
+
+# Windows console default codepage often can't print Devanagari (video
+# titles etc.) -- without this, that crashes the whole run mid-way
+# instead of just printing the title oddly. Same fix applied across
+# every script here that might print Hindi text.
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 from datetime import datetime, timezone
 
 # --- EDIT FOR YOUR NICHE ---------------------------------------------------
@@ -68,7 +76,7 @@ YTDLP = "yt-dlp"
 
 def _run(cmd: list, timeout: int) -> str:
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
         return result.stdout
     except FileNotFoundError:
         print("ERROR: yt-dlp not found. Run: pip install -r requirements.txt")

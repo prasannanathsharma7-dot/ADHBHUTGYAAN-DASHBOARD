@@ -23,6 +23,10 @@ import os
 import re
 import subprocess
 import sys
+
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 import tempfile
 from datetime import datetime, timezone
 
@@ -64,7 +68,7 @@ def fetch_transcript(video_id: str) -> tuple[str, str]:
                 subprocess.run(
                     ["yt-dlp", "--skip-download", flag, "--sub-langs", SUB_LANGS,
                      "--sub-format", "vtt", "-o", out_tpl, url],
-                    capture_output=True, text=True, timeout=120,
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
                 )
             except FileNotFoundError:
                 print("ERROR: yt-dlp not found. Run: pip install -r requirements.txt")
