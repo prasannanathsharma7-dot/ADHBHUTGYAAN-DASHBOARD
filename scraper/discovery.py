@@ -196,7 +196,14 @@ def main():
             if not ids:
                 print("  0 videos found -- handle may be wrong, verify it resolves in a browser.")
                 continue
-            videos = [m for m in (get_video_metadata(v) for v in ids) if m]
+            print(f"  found {len(ids)} recent video ids, fetching details...")
+            videos = []
+            for i, v in enumerate(ids, 1):
+                meta = get_video_metadata(v)
+                if meta:
+                    videos.append(meta)
+                if i % 5 == 0 or i == len(ids):
+                    print(f"    checked {i}/{len(ids)}")
             outliers = compute_outliers(videos, multiplier=args.multiplier)
             print(f"  {len(videos)} videos checked, {len(outliers)} outlier(s)")
             for v in outliers:

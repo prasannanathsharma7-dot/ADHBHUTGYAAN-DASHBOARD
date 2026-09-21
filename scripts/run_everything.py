@@ -103,6 +103,11 @@ def main():
 
     os.makedirs(LOG_DIR, exist_ok=True)
     py = sys.executable  # the venv's own python, whatever launched this script
+    py = [py, "-u"]  # unbuffered -- without this, a child script's print()
+    # output sits in an internal buffer (since its stdout is a pipe, not a
+    # real terminal) and doesn't reach this window until the buffer fills
+    # or the step finishes. Without -u this whole run LOOKS frozen at
+    # "1/6 Discovery" for a long time even while it's genuinely working.
 
     cycle = 1
     while True:
@@ -115,15 +120,15 @@ def main():
             results = {}
             results["discovery"] = run_step(
                 logfile, "1/6 Discovery",
-                [py, "scraper/discovery.py", "--multiplier", str(args.discovery_multiplier)],
+                [*py, "scraper/discovery.py", "--multiplier", str(args.discovery_multiplier)],
             )
             results["scrape"] = run_step(
                 logfile, "2/6 Scrape",
-                [py, "scripts/run_local_pipeline.py", "--skip-enrich"],
+                [*py, "scripts/run_local_pipeline.py", "--skip-enrich"],
             )
             results["prefilter"] = run_step(
                 logfile, "3/6 Prefilter",
-                [py, "nlp/prefilter.py"],
+                [*py, "nlp/prefilter.py"],
             )
 
             enrich_mode = detect_enrichment(args.enrich_with)
@@ -131,15 +136,15 @@ def main():
                 log(logfile, "\n4/6 Enrichment -- skipped (--enrich-with skip)")
                 results["enrich"] = True
             elif enrich_mode == "claude":
-                results["enrich"] = run_step(logfile, "4/6 Enrichment (Claude Batch)", [py, "nlp/batch_pipeline.py"])
+                results["enrich"] = run_step(logfile, "4/6 Enrichment (Claude Batch)", [*py, "nlp/batch_pipeline.py"])
             else:
                 results["enrich"] = run_step(
                     logfile, "4/6 Enrichment (Ollama, free)",
-                    [py, "nlp/local_enrich_ollama.py", "--workers", str(args.ollama_workers)],
+                    [*py, "nlp/local_enrich_ollama.py", "--workers", str(args.ollama_workers)],
                 )
 
-            results["transcripts"] = run_step(logfile, "5/6 Transcripts", [py, "scraper/transcripts.py"])
-            results["gap_analysis"] = run_step(logfile, "6/6 Gap analysis", [py, "nlp/run_gap_analysis.py"])
+            results["transcripts"] = run_step(logfile, "5/6 Transcripts", [*py, "scraper/transcripts.py"])
+            results["gap_analysis"] = run_step(logfile, "6/6 Gap analysis", [*py, "nlp/run_gap_analysis.py"])
 
             log(logfile, f"\n{'=' * 70}\nCycle {cycle} summary\n{'=' * 70}")
             for step, ok in results.items():
